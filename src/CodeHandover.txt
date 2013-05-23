@@ -1,0 +1,119 @@
+#Data queries and data preparation
+import gdata.gauth
+import httplib2
+from apiclient.discovery import build
+from oauth2client.client import flow_from_clientsecrets
+from oauth2client.file import Storage
+from oauth2client.tools import run
+import sys
+import numpy
+import matplotlib
+sys.path.append("/Users/user/Documents/workspace/livestation/data")
+from ga import *
+from plotter import *
+p=Plotter()
+gad=GADataExtractor("/Users/user/Documents/QB/Livestation/Phase2/client_secrets.json","https://www.googleapis.com/auth/analytics.readonly","/Users/user/Documents/QB/Livestation/Phase2/analytics.dat")
+gad.querybytimeslotforcountry(3,'2012-01-01','2013-02-13','aljazeera','Saudi Arabia')
+topregions=['Saudi Arabia']
+weekdaymapslist,weekdaystatsmapslist=gad.gettimeofdaycharacterizationbyregiontotalvisitors('2012-01-01','2013-02-13','aljazeera',topregions)
+
+smootheddaymapslist,smoothedweekdaystatsmapslist=gad.smoothLS(weekdaymapslist,4)
+weekdaymapsTV,weekdaystatsmapTV,regiondaymeanvectorsTV=gad.parsetotalTVratingsfilever2('/Users/user/Documents/QB/Livestation/Phase2/6channelvolgenderagegroupshour.txt',3)
+smootheddaymapsTV,smoothedweekdaystatsmapTV=gad.smoothTV(weekdaymapsTV,4)
+
+#Calibrate the random forest model (Last 3 arguments are the order of polynomial features, number of trees and percentage of the dataset taken as the training set respectively)
+dayhourmodelmaprf,dayerrorsrf,dayrsquaredsrf,dayrsquaredsrandomrf,daycorrsrf,dayerrorstdsrf,dayerrorpsrf=gad.trainrandomforest(smootheddaymapslist, smootheddaymapsTV,'Saudi Arabia',1,50,0.8)
+
+#Regression with k-fold CV run multiple times (Last 3 arguments are order of the polynomial, k and number of iterations respectively)
+errors,errorstds,rsquareds,models,finalaveragemodel,errorsofruns,errorstdsofruns,finaldayrsquareds,finaldaycorrs,finaldayerrors,finaldayerrorstds,finaldayerrorpercentages=gad.runregression(smootheddaymapslist,smootheddaymapsTV,'Saudi Arabia',2,10,200)
+
+#Calibrate Regression model without CV
+dayhourmodelmapreg,dayerrorsreg,dayerrorpsreg,dayrsquaredsreg,dayrsquaredrandomreg,daycorrsreg=gad.runpolyregression(smootheddaymapslist,smootheddaymapsTV,'Saudi Arabia',1,0.8)
+
+#Get average figures for any metric
+avrsquared,dayavrsquared=gad.getaveragemetric(dayrsquareds)
+averrorp,dayaverrorp=gad.getaveragemetric(dayerrorps)
+averror,dayaverror=gad.getaveragemetric(dayerrors)
+
+#Get model sensitivity
+averrorpsrf,averrorpsreg=gad.computemodelsensitivity(smootheddaymapslist,smootheddaymapsTV,'Saudi Arabia',1,2,50)
+
+percentages=[0.6,0.7,0.8,0.9]
+#Plot model sensitivity
+p.generatesensitivityplot(13.5,percentages,averrorpsrf,averrorpsreg,'/Users/user/Documents/QB/Livestation/Phase2/modelsensitivity.png')
+
+#Get LS,TV and predictions for given week window (Model type is the before last parameter, the last is the order for RF models)
+LSvaluesrf,TVvaluesrf,predTVvaluesrf=gad.getvaluesandpredictionsforweeks(0,45,57,smootheddaymapslist,smootheddaymapsTV, dayhourmodelmap,1,1)
+
+#For reg with CV
+LSvaluesregcv,TVvaluesregcv,predTVvaluesregcv=gad.getvaluesandpredictionsforweeks(0,45,57,smootheddaymapslist,smootheddaymapsTV,finalaveragemodel,0,1)
+
+#For reg without CV
+LSvaluesreg,TVvaluesreg,predTVvaluesreg=gad.getvaluesandpredictionsforweeks(0,45,57,smootheddaymapslist,smootheddaymapsTV, dayhourmodelmapreg,0,1)
+
+#Plot results for a specific week in multiplot figure
+gad.generateweekdayplots(LSvalues,TVvalues,predTVvalues,50,"/Users/user/Documents/QB/Livestation/Phase2/weekdayplotunsmoothed1.png")
+p.generateweekdayplots(LSvalues,TVvalues,predTVvalues,45,"/Users/user/Documents/QB/Livestation/Phase2/weekdayplotrfunsmoothed1.png")
+
+#Plot results for a specific day of the week averaged over a number of weeks
+p.generateweekdayplotsaveragedoverweeks(0,LSvalues,TVvalues,predTVvalues,50,56,"/Users/user/Documents/QB/Livestation/Phase2/weekdayavplotrf1.png")
+
+#Same as above but all weekdays in the same plot
+p.generateallweekdayplotsaveragedoverweeks(LSvalues,TVvalues,predTVvalues,50,56,"/Users/user/Documents/QB/Livestation/Phase2/weekdayavplotrfallweekdays.png")
+
+#Same as above but all in single plot
+p.generateallweekdayplotsaveragedoverweekssingleplot(LSvalues2,TVvalues2,predTVvalues2,45,56,"/Users/user/Documents/QB/Livestation/Phase2/weekdayavplotregallweekdayssingle.png")
+
+#Generate CSV
+p.generatecsvfileforweekdayplots(LSvalues,TVvalues,predTVvalues,45,56,"/Users/user/Documents/QB/Livestation/Phase2/weekdayavrf.csv")
+
+#Plot results for a specific day and specific week
+p.generateweekdayplotforspecificweek(0,LSvalues,TVvalues,predTVvalues,53,"/Users/user/Documents/QB/Livestation/Phase2/weekdayplotnewrf1.png")
+
+#Same as above but for all days of the specific week
+p.generateweekplot(LSvalues,TVvalues,predTVvalues,53,"/Users/user/Documents/QB/Livestation/Phase2/weekdayplotrfall.png")
+
+p.generatecsvforweek(LSvalues,TVvalues,predTVvalues,54,"/Users/user/Documents/QB/Livestation/Phase2/weekdaycsv54rf.csv")
+
+#Multiple weeks back to back
+p.generateconsecutiveweeksplot(LSvalues2,TVvalues2,predTVvalues2,51,54,"/Users/user/Documents/QB/Livestation/Phase2/weeksconsecreg51-54.png")
+
+#Average Percent error over several weeks
+p.plotavpercenterroroverweeks(LSvalues,TVvalues,predTVvalues,45,56,"/Users/user/Documents/QB/Livestation/Phase2/weekdayavpercenterrorrf.png")
+
+#Percent error for specific week
+p.plotpercenterrorforspecificweek(LSvalues,TVvalues,predTVvalues,54,"/Users/user/Documents/QB/Livestation/Phase2/weekdaypercenterrorrf54.png")
+
+#Box plot
+p.generateboxplotforhourresiduals(LSvalues,TVvalues,predTVvalues,45,56,"/Users/user/Documents/QB/Livestation/Phase2/boxrf.png")
+
+p.generateweekdayplots(LSvalues2,TVvalues2,predTVvalues2,45,"/Users/user/Documents/QB/Livestation/Phase2/weekdayplotreg1.png")
+
+#Scatter plot of actual vs predicted
+gad.generateactualvspredictedplots(LSvalues,TVvalues,predTVvalues,50,"/Users/user/Documents/QB/Livestation/Phase2/scatterreg1.png")
+p.generateactualvspredictedplots(LSvalues,TVvalues,predTVvalues,50,"/Users/user/Documents/QB/Livestation/Phase2/scatterrfnew.png")
+
+#By grouping hour windows
+p.generateactualvspredictedplotsusinghourgrouping(3,LSvalues,TVvalues,predTVvalues,50,"/Users/user/Documents/QB/Livestation/Phase2/scatterrfnew.png")
+
+#Generate scatter plot for time slots over all weeks           
+p.generatescatterplothourgrouping(3,LSvalues,TVvalues,predTVvalues,45,57,"/Users/user/Documents/QB/Livestation/Phase2/scatterrfnew.png")
+
+#Box plot aggregated as scatter plot above
+p.generateboxplotbyhourgroups(3,LSvalues,TVvalues,predTVvalues,45,56,"/Users/user/Documents/QB/Livestation/Phase2/boxplotrfnew.png")
+
+#Box plot of residuals
+p.generateboxplot(3,LSvalues,TVvalues,predTVvalues,45,57,"/Users/user/Documents/QB/Livestation/Phase2/boxrf.png")
+
+#Sort models by correlation coeff and RMSE
+daymodelcorrssortedrf,daymodelerrorssortedrf=gad.sortmodelsbycorranderrors(daycorrs,dayerrors)
+daymodelcorrssortedreg,daymodelerrorssortedreg=gad.sortmodelsbycorranderrors(finaldaycorrs,finaldayerrors)
+
+#Should be in gad, but due to time limitations
+topmodelsrf,topmodelsreg=p.getoverlapbycorranderror(10,daymodelcorrssortedrf,daymodelcorrssortedreg,daymodelerrorssortedrf,daymodelerrorssortedreg)
+
+topmodelserrorsrf,topmodelscorrsrf,topmodelserrorsreg,topmodelscorrsreg=p.getavcorranderrorfortopmodels(topmodelsrf,topmodelsreg,dayerrors,daycorrs,finaldayerrors,finaldaycorrs)
+
+
+#For plotting actual vs predicted ratings
+gad.generatepredictionsplot(smootheddaymapslist,smootheddaymapsTV,models,2,finalaveragemodel,30,58,1,18,"/Users/user/Documents/QB/Livestation/Phase2/plotreg1.png")
